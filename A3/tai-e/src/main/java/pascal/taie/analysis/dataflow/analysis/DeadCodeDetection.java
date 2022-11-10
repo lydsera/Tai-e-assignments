@@ -44,10 +44,9 @@ import pascal.taie.ir.stmt.AssignStmt;
 import pascal.taie.ir.stmt.If;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.SwitchStmt;
+import soot.jimple.toolkits.scalar.Evaluator;
 
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class DeadCodeDetection extends MethodAnalysis {
 
@@ -71,8 +70,87 @@ public class DeadCodeDetection extends MethodAnalysis {
         Set<Stmt> deadCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
         // TODO - finish me
         // Your task is to recognize dead code in ir and add it to deadCode
+        Queue<Stmt> queue = new ArrayDeque<>();
+        queue.add(cfg.getEntry());
+        Set<Stmt> marked = new HashSet<>();
+        while(!queue.isEmpty())
+        {
+            Stmt stmt = queue.remove();
+            marked.add(stmt);
+            if(stmt instanceof AssignStmt<?,?> assign)
+            {
+                if(assign.getLValue() instanceof Var lhs)
+                {
+                    if(!liveVars.getOutFact(assign).contains(lhs)&&hasNoSideEffect(assign.getRValue()))
+                    {
+                        deadCode.add(stmt);
+                    }
+                }
+            }
+            for(Edge<Stmt> edge : cfg.getOutEdgesOf(stmt))
+            {
+                if(!isUnreach(edge,constants))
+                {
+                    Stmt suc = edge.getTarget();
+                    if(!marked.contains(suc)) queue.add(suc);
+                }
+            }
+        }
+        if (marked.size() < cfg.getNumberOfNodes())
+        {
+            for (Stmt s : ir)
+            {
+                if (!marked.contains(s))
+                {
+                    deadCode.add(s);
+                }
+            }
+        }
         return deadCode;
     }
+    boolean isUnreach(Edge<Stmt> edge,DataflowResult<Stmt,CPFact> constants)
+    {
+        Stmt src=edge.getSource();
+        if(src instanceof  If ifstmt)
+        {
+            Value val = ConstantPropagation.evaluate(ifstmt.getCondition(), constants.getInFact(ifstmt));
+            if(val.isConstant())
+            {
+                int v = val.getConstant();
+                if((v==1&&edge.getKind()== Edge.Kind.IF_FALSE)||(v==0&&edge.getKind()== Edge.Kind.IF_TRUE))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (src instanceof SwitchStmt switchstmt)
+        {
+            Value val = ConstantPropagation.evaluate(switchstmt.getVar(),constants.getInFact(switchstmt));
+            if(val.isConstant())
+            {
+                int v = val.getConstant();
+                if(edge.isSwitchCase())
+                {
+                    if(v!=edge.getCaseValue())
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    for(int x:switchstmt.getCaseValues())
+                    {
+                        if(x==v)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
 
     /**
      * @return true if given RValue has no side effect, otherwise false.

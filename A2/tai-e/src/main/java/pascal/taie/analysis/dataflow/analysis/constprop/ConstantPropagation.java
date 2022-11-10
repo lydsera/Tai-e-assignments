@@ -22,6 +22,7 @@
 
 package pascal.taie.analysis.dataflow.analysis.constprop;
 
+import org.yaml.snakeyaml.scanner.Constant;
 import pascal.taie.analysis.dataflow.analysis.AbstractDataflowAnalysis;
 import pascal.taie.analysis.graph.cfg.CFG;
 import pascal.taie.config.AnalysisConfig;
@@ -57,7 +58,14 @@ public class ConstantPropagation extends
     @Override
     public CPFact newBoundaryFact(CFG<Stmt> cfg) {
         // TODO - finish me
-        return new CPFact();
+        IR ir = cfg.getIR();
+        CPFact entryFact = newInitialFact();
+        for(Var var : ir.getParams())
+        {
+            if(canHoldInt(var))
+                entryFact.update(var,Value.getNAC());
+        }
+        return entryFact;
     }
 
     @Override
@@ -69,6 +77,11 @@ public class ConstantPropagation extends
     @Override
     public void meetInto(CPFact fact, CPFact target) {
         // TODO - finish me
+        for(Var var:fact.keySet())
+        {
+            target.update(var,meetValue(fact.get(var),target.get(var)));
+        }
+
     }
 
     /**
@@ -77,13 +90,36 @@ public class ConstantPropagation extends
     public Value meetValue(Value v1, Value v2) {
         // TODO - finish me
         if(v1.isNAC()||v2.isNAC()) return v1.getNAC();
-        return null;
+        else if(v1.isConstant()&&v2.isUndef()) return v1;
+        else if(v2.isConstant()&&v1.isUndef()) return v2;
+        else if(v1.equals(v2)) return v1;
+        return v1.getNAC();
     }
 
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        return false;
+
+        if (stmt instanceof DefinitionStmt def)
+        {
+            if(def.getLValue() instanceof Var lvar){
+                Exp rexp = def.getRValue();
+                boolean flag=false;
+                for (Var invar : in.keySet()) {
+                    if (!invar.equals(lvar)) {
+                        flag |= out.update(invar, in.get(invar));
+                    }
+                }
+                if(canHoldInt(lvar))
+                    flag|=out.update(lvar,evaluate(rexp,in));
+                return flag;
+
+            }
+
+
+
+        }
+        return out.copyFrom(in);
     }
 
     /**
@@ -113,6 +149,69 @@ public class ConstantPropagation extends
      */
     public static Value evaluate(Exp exp, CPFact in) {
         // TODO - finish me
-        return null;
+        if (exp instanceof IntLiteral) {
+            return Value.makeConstant(((IntLiteral) exp).getValue());
+        } else if (exp instanceof Var) {
+            return in.get((Var)exp);
+        } else if (exp instanceof BinaryExp) {
+            BinaryExp binary=(BinaryExp)exp;
+            BinaryExp.Op op = binary.getOperator();
+            Value v1 = evaluate(binary.getOperand1(), in);
+            Value v2 = evaluate(binary.getOperand2(), in);
+            if(v2.isConstant() && v2.getConstant()==0)
+            {
+                if(op instanceof ArithmeticExp.Op)
+                {
+                    BinaryExp.Op tem = (ArithmeticExp.Op) op;
+                    if(tem==ArithmeticExp.Op.REM || tem==ArithmeticExp.Op.DIV) return Value.getUndef();
+                }
+            }
+            if (v1.isConstant() && v2.isConstant()) {
+                int i1 = v1.getConstant();
+                int i2 = v2.getConstant();
+                int tmp=0;
+                if (op instanceof ArithmeticExp.Op)
+                {
+                    ArithmeticExp.Op tem = (ArithmeticExp.Op) op;
+                    if(tem==ArithmeticExp.Op.ADD) tmp=i1+i2;
+                    else if(tem==ArithmeticExp.Op.SUB) tmp=i1-i2;
+                    else if(tem==ArithmeticExp.Op.DIV) tmp=i1/i2;
+                    else if(tem==ArithmeticExp.Op.MUL) tmp=i1*i2;
+                    else if(tem==ArithmeticExp.Op.REM) tmp=i1%i2;
+                }
+                else if (op instanceof ConditionExp.Op)
+                {
+                    ConditionExp.Op tem = (ConditionExp.Op) op;
+                    if(tem==ConditionExp.Op.EQ) tmp=i1 == i2 ? 1 : 0;
+                    else if(tem==ConditionExp.Op.GE) tmp=i1 >= i2 ? 1 : 0;
+                    else if(tem==ConditionExp.Op.LT) tmp=i1 < i2 ? 1 : 0;
+                    else if(tem==ConditionExp.Op.GT) tmp=i1 > i2 ? 1 : 0;
+                    else if(tem==ConditionExp.Op.LE) tmp=i1 <= i2 ? 1 : 0;
+                    else if(tem==ConditionExp.Op.NE) tmp=i1 != i2 ? 1 : 0;
+                }
+                else if (op instanceof ShiftExp.Op)
+                {
+                    ShiftExp.Op tem = (ShiftExp.Op) op;
+                    if(tem==ShiftExp.Op.SHL) tmp=i1<<i2;
+                    else if(tem==ShiftExp.Op.SHR) tmp=i1>>i2;
+                    else if(tem==ShiftExp.Op.USHR) tmp=i1>>>i2;
+                }
+                else if (op instanceof BitwiseExp.Op)
+                {
+                    BitwiseExp.Op tem = (BitwiseExp.Op) op;
+                    if(tem==BitwiseExp.Op.OR) tmp=i1|i2;
+                    else if(tem==BitwiseExp.Op.AND) tmp=i1&i2;
+                    else if(tem==BitwiseExp.Op.XOR) tmp=i1^i2;
+                }
+                return Value.makeConstant(tmp);
+            } else if (v1.isNAC() || v2.isNAC())
+            {
+                return Value.getNAC();
+            }
+            return Value.getUndef();
+        }
+        return Value.getNAC();
+
     }
+
 }
